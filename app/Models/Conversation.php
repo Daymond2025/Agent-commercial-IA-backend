@@ -40,6 +40,11 @@ class Conversation extends Model
         return $this->hasMany(Followup::class);
     }
 
+    public function latestMessage(): HasOne
+    {
+        return $this->hasOne(Message::class)->latestOfMany();
+    }
+
     public function isWithin24hWindow(): bool
     {
         return $this->window_expires_at && now()->lt($this->window_expires_at);

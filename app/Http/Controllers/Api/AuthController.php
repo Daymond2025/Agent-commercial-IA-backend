@@ -14,13 +14,11 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         $request->validate([
-            'email' => 'required|email',
+            'email'    => 'required|email',
             'password' => 'required|string',
         ]);
 
-        $credentials = $request->only('email', 'password');
-
-        if (!$token = JWTAuth::attempt($credentials)) {
+        if (!$token = JWTAuth::attempt($request->only('email', 'password'))) {
             return response()->json(['message' => 'Identifiants incorrects'], 401);
         }
 
@@ -32,11 +30,11 @@ class AuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
+            'user'  => [
+                'id'    => $user->id,
+                'name'  => $user->name,
                 'email' => $user->email,
-                'role' => $user->role,
+                'role'  => $user->role,
             ],
         ]);
     }
@@ -50,5 +48,24 @@ class AuthController extends Controller
     {
         JWTAuth::invalidate(JWTAuth::getToken());
         return response()->json(['message' => 'Déconnecté avec succès']);
+    }
+
+    public function changePassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'current_password'          => 'required|string',
+            'new_password'              => 'required|string|min:8|confirmed',
+            'new_password_confirmation' => 'required|string',
+        ]);
+
+        $user = auth()->user();
+
+        if (!Hash::check($request->current_password, $user->password)) {
+            return response()->json(['error' => 'Le mot de passe actuel est incorrect.'], 422);
+        }
+
+        $user->update(['password' => Hash::make($request->new_password)]);
+
+        return response()->json(['message' => 'Mot de passe mis à jour avec succès.']);
     }
 }

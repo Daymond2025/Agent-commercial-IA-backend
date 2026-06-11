@@ -5,6 +5,7 @@ namespace App\Services\AI;
 use App\Models\Conversation;
 use App\Models\Product;
 use App\Models\Message;
+use App\Models\WhatsappAgent;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -17,27 +18,27 @@ class ClaudeService
     public function __construct()
     {
         $this->apiKey = config('claude.api_key');
-        $this->model = config('claude.model', 'claude-sonnet-4-6');
+        $this->model  = config('claude.model', 'claude-sonnet-4-6');
     }
 
     public function processMessage(Conversation $conversation, string $userMessage): string
     {
-        $history = $this->getConversationHistory($conversation->id);
-        $products = $this->getProductsCatalog();
+        $history      = $this->getConversationHistory($conversation->id);
+        $products     = $this->getAgentProducts($conversation->agent);
         $systemPrompt = $this->buildSystemPrompt($conversation, $products);
 
         $history[] = ['role' => 'user', 'content' => $userMessage];
 
         try {
             $response = Http::withHeaders([
-                'x-api-key' => $this->apiKey,
+                'x-api-key'         => $this->apiKey,
                 'anthropic-version' => '2023-06-01',
-                'content-type' => 'application/json',
+                'content-type'      => 'application/json',
             ])->post("{$this->baseUrl}/messages", [
-                'model' => $this->model,
+                'model'      => $this->model,
                 'max_tokens' => 1024,
-                'system' => $systemPrompt,
-                'messages' => $history,
+                'system'     => $systemPrompt,
+                'messages'   => $history,
             ]);
 
             if ($response->failed()) {
@@ -47,7 +48,6 @@ class ClaudeService
 
             $assistantMessage = $response->json('content.0.text');
 
-            $history[] = ['role' => 'assistant', 'content' => $assistantMessage];
             $this->saveConversationHistory($conversation->id, $history);
 
             return $assistantMessage;
@@ -59,8 +59,8 @@ class ClaudeService
 
     public function extractOrderData(Conversation $conversation): array
     {
-        $history = $this->getConversationHistory($conversation->id);
-        $products = $this->getProductsCatalog();
+        $history  = $this->getConversationHistory($conversation->id);
+        $products = $this->getAgentProducts($conversation->agent);
 
         $extractPrompt = "Analyse cette conversation et extrait les données de commande au format JSON strict :
 {
@@ -76,14 +76,14 @@ Retourne UNIQUEMENT le JSON, sans aucun texte supplémentaire.";
 
         try {
             $response = Http::withHeaders([
-                'x-api-key' => $this->apiKey,
+                'x-api-key'         => $this->apiKey,
                 'anthropic-version' => '2023-06-01',
-                'content-type' => 'application/json',
+                'content-type'      => 'application/json',
             ])->post("{$this->baseUrl}/messages", [
-                'model' => $this->model,
+                'model'      => $this->model,
                 'max_tokens' => 512,
-                'system' => "Tu es un extracteur de données JSON. Catalogue produits disponibles : " . json_encode($products),
-                'messages' => array_merge($history, [
+                'system'     => "Tu es un extracteur de données JSON. Catalogue produits disponibles : " . json_encode($products),
+                'messages'   => array_merge($history, [
                     ['role' => 'user', 'content' => $extractPrompt]
                 ]),
             ]);
@@ -98,9 +98,10 @@ Retourne UNIQUEMENT le JSON, sans aucun texte supplémentaire.";
 
     private function buildSystemPrompt(Conversation $conversation, array $products): string
     {
-        $persona = $conversation->agent->persona ?? [];
+        $agent     = $conversation->agent;
+        $persona   = $agent->persona ?? [];
         $agentName = $persona['name'] ?? 'Awa';
-        $stage = $conversation->stage;
+        $stage     = $conversation->stage;
 
         $productList = collect($products)->map(function ($p) {
             $specs = is_array($p['specs']) ? implode(', ', array_map(
@@ -111,7 +112,10 @@ Retourne UNIQUEMENT le JSON, sans aucun texte supplémentaire.";
             return "- {$p['name']} ({$p['brand']}): {$p['price']} | {$p['description']} | {$specs}";
         })->implode("\n");
 
-        return <<<PROMPT
+        // ---------------------------------------------------------------
+        // PROMPT DE BASE — identité Daymond, toujours présent
+        // ---------------------------------------------------------------
+        $prompt = <<<PROMPT
 Tu es {$agentName}, agent commercial virtuel de Daymond, une entreprise spécialisée dans la vente d'ordinateurs en Côte d'Ivoire.
 
 RÈGLES STRICTES :
@@ -133,6 +137,46 @@ PROCESSUS DE VENTE :
 
 IMPORTANT : Quand le client confirme sa commande, termine ton message par [ORDER_CONFIRMED]
 PROMPT;
+
+        // ---------------------------------------------------------------
+        // INSTRUCTIONS SPÉCIFIQUES À CET AGENT (complément du prompt de base)
+        // ---------------------------------------------------------------
+        if (!empty($agent->instructions)) {
+            $prompt .= "\n\nINSTRUCTIONS SPÉCIFIQUES POUR CET AGENT :\n{$agent->instructions}";
+        }
+
+        // ---------------------------------------------------------------
+        // BASE DE CONNAISSANCES
+        // ---------------------------------------------------------------
+        if (!empty($agent->knowledge_base)) {
+            $prompt .= "\n\nBASE DE CONNAISSANCES :\n{$agent->knowledge_base}";
+        }
+
+        // ---------------------------------------------------------------
+        // URL DU SITE / CATALOGUE EN LIGNE
+        // ---------------------------------------------------------------
+        if (!empty($agent->website_url)) {
+            $prompt .= "\n\nSITE WEB / CATALOGUE EN LIGNE : {$agent->website_url}\nTu peux mentionner ce lien au client s'il souhaite voir plus de produits.";
+        }
+
+        return $prompt;
+    }
+
+    /**
+     * Retourne les produits assignés à l'agent.
+     * Si aucun produit assigné, retourne tous les produits disponibles.
+     */
+    private function getAgentProducts(WhatsappAgent $agent): array
+    {
+        $assignedIds = $agent->products()->pluck('products.id');
+
+        $query = Product::where('is_available', true);
+
+        if ($assignedIds->isNotEmpty()) {
+            $query->whereIn('id', $assignedIds);
+        }
+
+        return $query->get()->map->toAgentContext()->toArray();
     }
 
     private function getConversationHistory(int $conversationId): array
@@ -150,13 +194,5 @@ PROMPT;
     private function saveConversationHistory(int $conversationId, array $history): void
     {
         // L'historique est déjà persisté en base via ProcessWhatsAppMessage
-    }
-
-    private function getProductsCatalog(): array
-    {
-        return Product::where('is_available', true)
-            ->get()
-            ->map->toAgentContext()
-            ->toArray();
     }
 }
