@@ -13,7 +13,7 @@ class ConversationController extends Controller
     {
         $query = Conversation::with([
                 'agent:id,name,avatar_url,persona',
-                'latestMessage:id,conversation_id,content,direction,created_at',
+                'latestMessage', // latestOfMany() incompatible avec la sélection de colonnes
             ])
             ->withCount('messages')
             ->orderByDesc('last_message_at');

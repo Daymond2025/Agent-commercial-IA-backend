@@ -57,6 +57,60 @@ class ClaudeService
         }
     }
 
+    public function generateRelanceMessage(Conversation $conversation): string
+    {
+        $agent     = $conversation->agent;
+        $persona   = $agent->persona ?? [];
+        $agentName = $persona['name'] ?? 'Awa';
+
+        $firstName = explode(' ', trim($conversation->customer_name ?? 'cher client'))[0];
+
+        $stageLabels = [
+            'greeting'          => 'le client a juste dit bonjour',
+            'product_selection' => 'le client cherchait un ordinateur',
+            'customer_info'     => 'le client avait choisi un produit et donnait ses infos',
+            'order_summary'     => 'le récapitulatif de commande avait été envoyé',
+            'confirmation'      => 'le client était sur le point de confirmer sa commande',
+        ];
+        $stageLabel = $stageLabels[$conversation->stage] ?? 'en cours de discussion';
+
+        $elapsed = $conversation->last_message_at
+            ? now()->diffInMinutes($conversation->last_message_at)
+            : 60;
+        $elapsedText = $elapsed < 60
+            ? "{$elapsed} minutes"
+            : round($elapsed / 60) . ' heures';
+
+        $systemPrompt = "Tu es {$agentName}, agent commercial de Daymond (vente d'ordinateurs en Côte d'Ivoire). "
+            . "Tu dois générer UN SEUL message de relance WhatsApp court (maximum 2 phrases) et chaleureux. "
+            . "N'utilise pas de formule d'intro générique. Sois naturel, direct et cordial. "
+            . "Ne mentionne JAMAIS que tu es une IA.";
+
+        $userPrompt = "Le client {$firstName} t'a contacté il y a {$elapsedText}. "
+            . "Contexte : {$stageLabel}. "
+            . "Génère un message de relance pour rouvrir la conversation et finaliser la vente.";
+
+        try {
+            $response = Http::withHeaders([
+                'x-api-key'         => $this->apiKey,
+                'anthropic-version' => '2023-06-01',
+                'content-type'      => 'application/json',
+            ])->post("{$this->baseUrl}/messages", [
+                'model'      => $this->model,
+                'max_tokens' => 200,
+                'system'     => $systemPrompt,
+                'messages'   => [['role' => 'user', 'content' => $userPrompt]],
+            ]);
+
+            return $response->json('content.0.text',
+                "Bonjour {$firstName} ! Avez-vous eu le temps de réfléchir à votre ordinateur ? Je suis disponible pour finaliser votre commande 😊"
+            );
+        } catch (\Exception $e) {
+            Log::error('Relance AI generation failed', ['error' => $e->getMessage()]);
+            return "Bonjour {$firstName} ! Avez-vous eu le temps de réfléchir ? Je reste disponible pour vous aider 😊";
+        }
+    }
+
     public function extractOrderData(Conversation $conversation): array
     {
         $history  = $this->getConversationHistory($conversation->id);
