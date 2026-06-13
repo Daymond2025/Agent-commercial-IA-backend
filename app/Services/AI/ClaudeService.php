@@ -150,6 +150,56 @@ Retourne UNIQUEMENT le JSON, sans aucun texte supplémentaire.";
         }
     }
 
+    /**
+     * Auto-formation : analyse les conversations réussies et génère des insights
+     * pour enrichir la knowledge_base de l'agent.
+     */
+    public function trainAgent(WhatsappAgent $agent): ?string
+    {
+        $successfulConvs = $agent->conversations()
+            ->where('status', 'confirmed')
+            ->with(['messages' => fn($q) => $q->orderBy('created_at')->limit(20)])
+            ->orderByDesc('updated_at')
+            ->limit(15)
+            ->get();
+
+        if ($successfulConvs->count() < 3) {
+            return null;
+        }
+
+        $conversationSamples = $successfulConvs->map(function ($conv) {
+            $msgs = $conv->messages->map(fn($m) =>
+                ($m->direction === 'inbound' ? 'Client: ' : 'Agent: ') . $m->content
+            )->implode("\n");
+            return "=== Vente réussie (étape: {$conv->stage}) ===\n{$msgs}";
+        })->implode("\n\n");
+
+        $systemPrompt = "Tu es un expert en formation commerciale pour une boutique d'ordinateurs en Côte d'Ivoire. "
+            . "Analyse les conversations WhatsApp ci-dessous qui ont abouti à des ventes confirmées. "
+            . "Génère une liste d'insights concrets et actionnables (max 10 points) qui aideront l'agent à mieux vendre. "
+            . "Format : bullet points courts, directs, en français. "
+            . "Inclus : objections fréquentes et réponses efficaces, produits populaires et leurs arguments de vente, "
+            . "séquences de questions qui font avancer le client, expressions qui déclenchent la confirmation.";
+
+        try {
+            $response = Http::withHeaders([
+                'x-api-key'         => $this->apiKey,
+                'anthropic-version' => '2023-06-01',
+                'content-type'      => 'application/json',
+            ])->timeout(60)->post("{$this->baseUrl}/messages", [
+                'model'      => $this->model,
+                'max_tokens' => 1500,
+                'system'     => $systemPrompt,
+                'messages'   => [['role' => 'user', 'content' => $conversationSamples]],
+            ]);
+
+            return $response->json('content.0.text');
+        } catch (\Exception $e) {
+            Log::error('Agent training failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
     private function buildSystemPrompt(Conversation $conversation, array $products): string
     {
         $agent     = $conversation->agent;

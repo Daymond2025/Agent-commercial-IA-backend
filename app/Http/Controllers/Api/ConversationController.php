@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
+use App\Models\Message;
+use App\Services\WhatsApp\WhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -42,6 +44,61 @@ class ConversationController extends Controller
         return response()->json(
             $conversation->load(['agent', 'messages', 'order.product', 'followups'])
         );
+    }
+
+    /**
+     * Envoyer un message depuis le dashboard (prise de main humaine).
+     * Commandes spéciales : ".." = pause IA, "..." = reprendre IA
+     */
+    public function sendMessage(Request $request, Conversation $conversation, WhatsAppService $whatsapp): JsonResponse
+    {
+        $request->validate(['message' => 'required|string|max:4096']);
+        $msg = trim($request->message);
+
+        // Commandes de contrôle IA
+        if ($msg === '..') {
+            $conversation->update(['ai_active' => false, 'ai_paused_at' => now()]);
+            return response()->json(['ai_paused' => true, 'message' => 'IA mise en pause pour cette conversation.']);
+        }
+        if ($msg === '...') {
+            $conversation->update(['ai_active' => true, 'ai_paused_at' => null]);
+            return response()->json(['ai_active' => true, 'message' => 'IA réactivée pour cette conversation.']);
+        }
+
+        if (!$conversation->isWithin24hWindow()) {
+            return response()->json(['error' => 'Fenêtre 24h expirée.'], 422);
+        }
+
+        $whatsapp->sendText($conversation->agent, $conversation->customer_phone, $msg);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'direction'       => 'outbound',
+            'type'            => 'text',
+            'content'         => $msg,
+            'status'          => 'sent',
+        ]);
+
+        $conversation->update(['last_message_at' => now()]);
+
+        return response()->json($message, 201);
+    }
+
+    /**
+     * Basculer l'état de l'IA pour une conversation (toggle depuis le dashboard).
+     */
+    public function toggleAI(Conversation $conversation): JsonResponse
+    {
+        $newState = !$conversation->ai_active;
+        $conversation->update([
+            'ai_active'    => $newState,
+            'ai_paused_at' => $newState ? null : now(),
+        ]);
+
+        return response()->json([
+            'ai_active' => $newState,
+            'message'   => $newState ? 'IA réactivée.' : 'IA mise en pause.',
+        ]);
     }
 
     public function stats(): JsonResponse

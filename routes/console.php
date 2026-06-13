@@ -13,6 +13,14 @@ Schedule::command('relances:auto')
     ->withoutOverlapping()
     ->appendOutputTo(storage_path('logs/auto-relance.log'));
 
+// Auto-formation hebdomadaire des agents (dimanche à 3h du matin)
+Schedule::command('agents:train')
+    ->weekly()
+    ->sundays()
+    ->at('03:00')
+    ->withoutOverlapping()
+    ->appendOutputTo(storage_path('logs/agents-training.log'));
+
 // Marque les conversations abandonnées (inactives depuis 72h)
 Schedule::call(function () {
     \App\Models\Conversation::where('status', 'active')

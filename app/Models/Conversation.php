@@ -12,12 +12,15 @@ class Conversation extends Model
     protected $fillable = [
         'whatsapp_agent_id', 'customer_phone', 'customer_name',
         'status', 'stage', 'last_message_at', 'window_expires_at', 'collected_data',
+        'ai_active', 'ai_paused_at',
     ];
 
     protected $casts = [
-        'collected_data' => 'array',
-        'last_message_at' => 'datetime',
-        'window_expires_at' => 'datetime',
+        'collected_data'   => 'array',
+        'last_message_at'  => 'datetime',
+        'window_expires_at'=> 'datetime',
+        'ai_paused_at'     => 'datetime',
+        'ai_active'        => 'boolean',
     ];
 
     public function agent(): BelongsTo

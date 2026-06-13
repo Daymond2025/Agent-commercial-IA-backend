@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\AgentDocument;
 use App\Models\WhatsappAgent;
+use App\Services\AI\ClaudeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -116,9 +118,114 @@ class AgentController extends Controller
         return response()->json($agents);
     }
 
+    /**
+     * Upload d'un document (PDF ou TXT) pour enrichir la base de connaissances.
+     */
+    public function uploadKnowledge(Request $request, WhatsappAgent $agent): JsonResponse
+    {
+        $request->validate([
+            'document' => 'required|file|mimes:pdf,txt|max:5120', // 5 Mo max
+        ]);
+
+        $file     = $request->file('document');
+        $mime     = $file->getMimeType();
+        $path     = $file->store("agents/{$agent->id}/documents", 'public');
+
+        $extracted = match (true) {
+            str_contains($mime, 'pdf')  => $this->extractPdfText($file->getRealPath()),
+            default                      => file_get_contents($file->getRealPath()),
+        };
+
+        $extracted = trim($extracted);
+
+        // Sauvegarde du document
+        AgentDocument::create([
+            'whatsapp_agent_id' => $agent->id,
+            'original_name'     => $file->getClientOriginalName(),
+            'file_path'         => $path,
+            'mime_type'         => $mime,
+            'extracted_text'    => $extracted,
+        ]);
+
+        // Enrichir la knowledge_base de l'agent
+        $separator    = "\n\n---\n\n";
+        $currentKb    = $agent->knowledge_base ?? '';
+        $docHeader    = "SOURCE : " . $file->getClientOriginalName();
+        $agent->update([
+            'knowledge_base' => trim($currentKb . $separator . $docHeader . "\n" . $extracted),
+        ]);
+
+        return response()->json([
+            'message'        => 'Document importé et base de connaissances mise à jour.',
+            'characters_added' => strlen($extracted),
+            'document_name'  => $file->getClientOriginalName(),
+        ], 201);
+    }
+
+    /**
+     * Liste des documents uploadés pour un agent.
+     */
+    public function documents(WhatsappAgent $agent): JsonResponse
+    {
+        return response()->json(
+            $agent->hasMany(AgentDocument::class, 'whatsapp_agent_id')
+                  ->orderByDesc('created_at')
+                  ->get(['id', 'original_name', 'mime_type', 'created_at'])
+        );
+    }
+
+    /**
+     * Auto-formation immédiate : Claude analyse les conversations réussies
+     * et génère des insights à ajouter à la knowledge_base de l'agent.
+     */
+    public function train(WhatsappAgent $agent, ClaudeService $claude): JsonResponse
+    {
+        $insights = $claude->trainAgent($agent);
+
+        if (!$insights) {
+            return response()->json(['message' => 'Pas assez de données pour former l\'agent.'], 422);
+        }
+
+        $separator = "\n\n---\n\n";
+        $header    = "AUTO-FORMATION (" . now()->format('d/m/Y H:i') . ") :";
+        $agent->update([
+            'knowledge_base' => trim(($agent->knowledge_base ?? '') . $separator . $header . "\n" . $insights),
+        ]);
+
+        return response()->json([
+            'message' => 'Agent formé avec succès.',
+            'insights_preview' => substr($insights, 0, 300) . '...',
+        ]);
+    }
+
     public function destroy(WhatsappAgent $agent): JsonResponse
     {
         $agent->update(['is_active' => false]);
         return response()->json(['message' => 'Agent désactivé']);
+    }
+
+    private function extractPdfText(string $filePath): string
+    {
+        // Extraction basique PDF en PHP pur (sans dépendance externe)
+        // Lit les flux de texte bruts du PDF
+        $content = file_get_contents($filePath);
+        $text    = '';
+
+        // Extraction des blocs de texte PDF (BT...ET)
+        preg_match_all('/BT\s*(.*?)\s*ET/s', $content, $matches);
+        foreach ($matches[1] as $block) {
+            preg_match_all('/\((.*?)\)\s*Tj/s', $block, $strings);
+            foreach ($strings[1] as $str) {
+                $text .= $str . ' ';
+            }
+            preg_match_all('/\[(.*?)\]\s*TJ/s', $block, $arrStrings);
+            foreach ($arrStrings[1] as $arrStr) {
+                preg_match_all('/\((.*?)\)/', $arrStr, $parts);
+                $text .= implode('', $parts[1]) . ' ';
+            }
+        }
+
+        $text = preg_replace('/\s+/', ' ', $text);
+        return trim($text) ?: '[PDF non lisible — texte non extractible automatiquement]';
     }
 }
