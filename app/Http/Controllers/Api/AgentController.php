@@ -36,6 +36,7 @@ class AgentController extends Controller
             'phone_number_id'=> 'required|string|unique:whatsapp_agents',
             'access_token'   => 'required|string',
             'waba_id'        => 'required|string',
+            'support_phone'  => 'nullable|string|max:20',
             'persona'        => 'nullable',
             'instructions'   => 'nullable|string',
             'knowledge_base' => 'nullable|string',
@@ -66,6 +67,7 @@ class AgentController extends Controller
             'name'           => 'sometimes|string|max:100',
             'access_token'   => 'sometimes|string',
             'is_active'      => 'sometimes|boolean',
+            'support_phone'  => 'nullable|string|max:20',
             'persona'        => 'nullable',
             'instructions'   => 'nullable|string',
             'knowledge_base' => 'nullable|string',
@@ -124,41 +126,47 @@ class AgentController extends Controller
     public function uploadKnowledge(Request $request, WhatsappAgent $agent): JsonResponse
     {
         $request->validate([
-            'document' => 'required|file|mimes:pdf,txt|max:5120', // 5 Mo max
+            'documents'   => 'required|array|min:1|max:20',
+            'documents.*' => 'file|mimes:pdf,txt,csv|max:10240', // 10 Mo par fichier
         ]);
 
-        $file     = $request->file('document');
-        $mime     = $file->getMimeType();
-        $path     = $file->store("agents/{$agent->id}/documents", 'public');
+        $results   = [];
+        $separator = "\n\n---\n\n";
+        $currentKb = $agent->knowledge_base ?? '';
 
-        $extracted = match (true) {
-            str_contains($mime, 'pdf')  => $this->extractPdfText($file->getRealPath()),
-            default                      => file_get_contents($file->getRealPath()),
-        };
+        foreach ($request->file('documents') as $file) {
+            $mime = $file->getMimeType();
+            $path = $file->store("agents/{$agent->id}/documents", 'public');
 
-        $extracted = trim($extracted);
+            $extracted = match (true) {
+                str_contains($mime, 'pdf')  => $this->extractPdfText($file->getRealPath()),
+                default                      => file_get_contents($file->getRealPath()),
+            };
+            $extracted = trim($extracted);
 
-        // Sauvegarde du document
-        AgentDocument::create([
-            'whatsapp_agent_id' => $agent->id,
-            'original_name'     => $file->getClientOriginalName(),
-            'file_path'         => $path,
-            'mime_type'         => $mime,
-            'extracted_text'    => $extracted,
-        ]);
+            AgentDocument::create([
+                'whatsapp_agent_id' => $agent->id,
+                'original_name'     => $file->getClientOriginalName(),
+                'file_path'         => $path,
+                'mime_type'         => $mime,
+                'extracted_text'    => $extracted,
+            ]);
 
-        // Enrichir la knowledge_base de l'agent
-        $separator    = "\n\n---\n\n";
-        $currentKb    = $agent->knowledge_base ?? '';
-        $docHeader    = "SOURCE : " . $file->getClientOriginalName();
-        $agent->update([
-            'knowledge_base' => trim($currentKb . $separator . $docHeader . "\n" . $extracted),
-        ]);
+            $docHeader  = "SOURCE : " . $file->getClientOriginalName();
+            $currentKb  = trim($currentKb . $separator . $docHeader . "\n" . $extracted);
+
+            $results[] = [
+                'name'       => $file->getClientOriginalName(),
+                'chars'      => strlen($extracted),
+                'mime'       => $mime,
+            ];
+        }
+
+        $agent->update(['knowledge_base' => $currentKb]);
 
         return response()->json([
-            'message'        => 'Document importé et base de connaissances mise à jour.',
-            'characters_added' => strlen($extracted),
-            'document_name'  => $file->getClientOriginalName(),
+            'message' => count($results) . ' document(s) importé(s) avec succès.',
+            'files'   => $results,
         ], 201);
     }
 

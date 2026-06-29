@@ -11,7 +11,8 @@ class Conversation extends Model
 {
     protected $fillable = [
         'whatsapp_agent_id', 'customer_phone', 'customer_name',
-        'status', 'stage', 'last_message_at', 'window_expires_at', 'collected_data',
+        'status', 'stage', 'source', 'session_token',
+        'last_message_at', 'window_expires_at', 'collected_data',
         'ai_active', 'ai_paused_at',
     ];
 

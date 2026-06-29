@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 class WhatsappAgent extends Model
 {
     protected $fillable = [
-        'name', 'phone_number', 'phone_number_id',
+        'name', 'phone_number', 'support_phone', 'phone_number_id',
         'access_token', 'waba_id', 'is_active', 'persona',
         'instructions', 'knowledge_base', 'website_url', 'avatar_url',
         'relance_hours', 'auto_relance_enabled',

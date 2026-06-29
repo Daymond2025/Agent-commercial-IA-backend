@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\LeadController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\RelanceTemplateController;
+use App\Http\Controllers\Api\WebChatController;
 use App\Http\Controllers\Webhook\WhatsAppWebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -18,6 +19,15 @@ Route::prefix('webhook/whatsapp')->group(function () {
 
 // Auth publique
 Route::post('/auth/login', [AuthController::class, 'login']);
+
+// ── WebChat public (sans JWT) ─────────────────────────────────────────────
+Route::prefix('chat')->group(function () {
+    Route::get('/product/{identifier}',  [WebChatController::class, 'product']);
+    Route::post('/start',                [WebChatController::class, 'start'])->middleware('throttle:20,1');
+    Route::post('/{token}/message',      [WebChatController::class, 'message'])->middleware('throttle:60,1');
+    Route::post('/{token}/upload',       [WebChatController::class, 'upload'])->middleware('throttle:30,1');
+    Route::get('/{token}/messages',      [WebChatController::class, 'messages'])->middleware('throttle:120,1');
+});
 
 // Routes protégées JWT
 Route::middleware('auth:api')->group(function () {

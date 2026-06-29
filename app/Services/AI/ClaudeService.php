@@ -116,17 +116,27 @@ class ClaudeService
         $history  = $this->getConversationHistory($conversation->id);
         $products = $this->getAgentProducts($conversation->agent);
 
-        $extractPrompt = "Analyse cette conversation et extrait les données de commande au format JSON strict :
-{
-  \"customer_name\": \"nom complet du client\",
-  \"customer_phone\": \"numéro de téléphone\",
-  \"customer_email\": \"email ou null\",
-  \"delivery_address\": \"adresse complète\",
-  \"delivery_city\": \"ville\",
-  \"product_id\": ID du produit choisi (integer),
-  \"confirmed\": true/false
-}
-Retourne UNIQUEMENT le JSON, sans aucun texte supplémentaire.";
+        // Indice produit pour les conversations webchat (client arrivé via pub Facebook)
+        $productHint = '';
+        if (!empty($conversation->collected_data['interested_product_name'])) {
+            $pid  = $conversation->collected_data['interested_product_id']   ?? '?';
+            $pname = $conversation->collected_data['interested_product_name'];
+            $productHint = "NOTE IMPORTANTE : Le client est arrivé via une pub pour « {$pname} » (ID: {$pid}). "
+                . "Si le produit commandé n'est pas explicitement mentionné dans la conversation, utilise cet ID.\n\n";
+        }
+
+        $extractPrompt = $productHint
+            . "Analyse cette conversation et extrait les données de commande au format JSON strict :\n"
+            . "{\n"
+            . "  \"customer_name\": \"nom complet du client\",\n"
+            . "  \"customer_phone\": \"numéro de téléphone\",\n"
+            . "  \"customer_email\": \"email ou null\",\n"
+            . "  \"delivery_address\": \"adresse complète\",\n"
+            . "  \"delivery_city\": \"ville\",\n"
+            . "  \"product_id\": ID du produit choisi (integer),\n"
+            . "  \"confirmed\": true/false\n"
+            . "}\n"
+            . "Retourne UNIQUEMENT le JSON, sans aucun texte supplémentaire.";
 
         try {
             $response = Http::withHeaders([
@@ -261,6 +271,25 @@ PROMPT;
         // ---------------------------------------------------------------
         if (!empty($agent->website_url)) {
             $prompt .= "\n\nSITE WEB / CATALOGUE EN LIGNE : {$agent->website_url}\nTu peux mentionner ce lien au client s'il souhaite voir plus de produits.";
+        }
+
+        // ---------------------------------------------------------------
+        // CONTEXTE WEBCHAT — produit sur lequel le client a cliqué
+        // ---------------------------------------------------------------
+        if (($conversation->source ?? 'whatsapp') === 'webchat') {
+            if (!empty($conversation->collected_data['interested_product_name'])) {
+                $pName = $conversation->collected_data['interested_product_name'];
+                $prompt .= "\n\nCONTEXTE : Le client a cliqué sur une publicité Facebook pour « {$pName} ». "
+                    . "Oriente naturellement la conversation vers ce produit en priorité. "
+                    . "Si le client ne mentionne pas de produit précis, guide-le vers celui-ci.";
+            }
+
+            // FORMAT DE CONFIRMATION WEBCHAT : inclure les données directement dans le tag
+            $prompt .= "\n\nFORMAT IMPORTANT POUR LA CONFIRMATION WEBCHAT : "
+                . "Remplace [ORDER_CONFIRMED] par le tag suivant (JSON compact, sur une ligne séparée, à la fin du message) :\n"
+                . "[ORDER_CONFIRMED:{\"product_id\":ID_NUMERIQUE,\"customer_name\":\"NOM\",\"customer_phone\":\"TELEPHONE\",\"delivery_address\":\"ADRESSE\",\"delivery_city\":\"VILLE\"}]\n"
+                . "Le product_id doit être l'identifiant entier exact du produit dans le catalogue. "
+                . "Remplace chaque valeur par les données réelles collectées durant la conversation.";
         }
 
         return $prompt;

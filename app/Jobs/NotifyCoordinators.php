@@ -34,17 +34,34 @@ class NotifyCoordinators implements ShouldQueue
             return;
         }
 
+        // Assigner le premier coordinateur disponible
         $coordinator = $coordinators->first();
         $this->order->update(['assigned_coordinator_id' => $coordinator->id]);
+
+        // Si l'agent n'a pas de credentials WhatsApp (ex. agent webchat), on skip l'envoi WA
+        if (empty($agent->phone_number_id) || empty($agent->access_token)) {
+            Log::info('NotifyCoordinators: agent sans credentials WhatsApp, notification WA ignorée', [
+                'order' => $this->order->reference,
+                'agent' => $agent->id,
+            ]);
+            return;
+        }
 
         $message = $this->buildNotificationMessage();
 
         foreach ($coordinators as $coord) {
-            $whatsapp->sendText($agent, $coord->whatsapp_phone, $message);
+            try {
+                $whatsapp->sendText($agent, $coord->whatsapp_phone, $message);
+            } catch (\Exception $e) {
+                Log::error('NotifyCoordinators: sendText failed', [
+                    'coordinator' => $coord->name,
+                    'error'       => $e->getMessage(),
+                ]);
+            }
         }
 
-        Log::info('Coordinators notified', [
-            'order' => $this->order->reference,
+        Log::info('Coordinators notified via WhatsApp', [
+            'order'        => $this->order->reference,
             'coordinators' => $coordinators->pluck('name'),
         ]);
     }

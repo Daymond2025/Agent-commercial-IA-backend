@@ -5,13 +5,32 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Str;
 
 class Product extends Model
 {
     protected $fillable = [
-        'name', 'brand', 'description', 'price', 'sale_price', 'currency',
+        'name', 'slug', 'brand', 'description', 'price', 'sale_price', 'currency',
         'specs', 'image_url', 'is_available', 'stock',
     ];
+
+    protected static function boot(): void
+    {
+        parent::boot();
+
+        static::creating(function (Product $product) {
+            if (empty($product->slug)) {
+                $product->slug = static::generateUniqueSlug($product->name);
+            }
+        });
+    }
+
+    private static function generateUniqueSlug(string $name): string
+    {
+        $base  = Str::slug($name);
+        $count = static::where('slug', 'like', $base . '%')->count();
+        return $count > 0 ? $base . '-' . ($count + 1) : $base;
+    }
 
     protected $casts = [
         'specs'       => 'array',
