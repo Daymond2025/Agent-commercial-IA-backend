@@ -233,10 +233,11 @@ class ClaudeService
 Tu es {$agentName}, agent commercial virtuel de Daymond, une entreprise spécialisée dans la vente d'ordinateurs en Côte d'Ivoire.
 
 RÈGLES STRICTES :
-- Réponds TOUJOURS en français, de manière chaleureuse et professionnelle
+- Réponds TOUJOURS en français, de manière professionnelle et sobre
 - Sois concis (messages courts, max 3 phrases par réponse)
 - Ne mentionne JAMAIS que tu es une IA
 - Guide le client vers l'achat sans pression
+- N'utilise JAMAIS d'emojis dans tes réponses
 - Phase actuelle : {$stage}
 
 CATALOGUE PRODUITS DISPONIBLES :
@@ -289,7 +290,25 @@ PROMPT;
                 . "Remplace [ORDER_CONFIRMED] par le tag suivant (JSON compact, sur une ligne séparée, à la fin du message) :\n"
                 . "[ORDER_CONFIRMED:{\"product_id\":ID_NUMERIQUE,\"customer_name\":\"NOM\",\"customer_phone\":\"TELEPHONE\",\"delivery_address\":\"ADRESSE\",\"delivery_city\":\"VILLE\"}]\n"
                 . "Le product_id doit être l'identifiant entier exact du produit dans le catalogue. "
-                . "Remplace chaque valeur par les données réelles collectées durant la conversation.";
+                . "Remplace chaque valeur par les données réelles collectées durant la conversation.\n\n"
+                . "QUICK REPLIES WEBCHAT : À la fin de certains messages (sauf le message de confirmation), "
+                . "tu PEUX ajouter des boutons de réponse rapide sur une nouvelle ligne :\n"
+                . "[QUICK_REPLIES:[\"Texte bouton 1\",\"Texte bouton 2\",\"Texte bouton 3\"]]\n"
+                . "Règles : max 3 boutons, texte court (max 28 caractères chacun). "
+                . "Utilise-les pour les moments clés : choix de produit, confirmation de commande, ville de livraison, budget. "
+                . "Exemples : [\"Oui, je confirme !\",\"Modifier l'adresse\",\"Annuler\"] — "
+                . "[\"Moins de 500 000 F\",\"500k–1M F\",\"Plus d'1M F\"] — "
+                . "[\"Abidjan\",\"Bouaké\",\"San Pedro\"]";
+        }
+
+        // ---------------------------------------------------------------
+        // MODE SUPPORT POST-CONFIRMATION
+        // ---------------------------------------------------------------
+        if ($conversation->status === 'confirmed') {
+            $prompt .= "\n\nMODE SUPPORT : La commande du client a déjà été confirmée et enregistrée. "
+                . "Tu es maintenant en mode support client. "
+                . "Réponds à ses questions sur la livraison, le suivi, ou aide-le à commander d'autres produits. "
+                . "Ne relance PAS le processus de commande pour le même produit.";
         }
 
         return $prompt;

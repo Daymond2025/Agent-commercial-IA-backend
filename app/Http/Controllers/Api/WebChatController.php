@@ -92,19 +92,19 @@ class WebChatController extends Controller
 
         if ($product) {
             $displayPrice = $product->sale_price
-                ? number_format($product->sale_price, 0, ',', ' ') . ' ' . $product->currency . ' 🔥'
+                ? number_format($product->sale_price, 0, ',', ' ') . ' ' . $product->currency . ' (promo)'
                 : number_format($product->price, 0, ',', ' ') . ' ' . $product->currency;
 
-            $welcome = "Bonjour ! Je suis {$agentName} 👋\n"
+            $welcome = "Bonjour, je suis {$agentName}.\n"
                 . "Je vois que vous vous intéressez au *{$product->name}*"
                 . ($product->brand ? " ({$product->brand})" : '')
-                . " à *{$displayPrice}*. Excellent choix !\n\n"
-                . "Je suis là pour vous accompagner jusqu'à la livraison 😊\n"
+                . " à *{$displayPrice}*. Excellent choix.\n\n"
+                . "Je suis à votre disposition pour vous accompagner jusqu'à la livraison.\n"
                 . "Comment puis-je vous appeler ?";
         } else {
-            $welcome = "Bonjour ! Je suis {$agentName} 👋\n"
-                . "Bienvenue chez *Daymond*, votre spécialiste en ordinateurs en Côte d'Ivoire !\n\n"
-                . "Je suis là pour vous aider à trouver l'ordinateur idéal selon vos besoins et votre budget 😊\n"
+            $welcome = "Bonjour, je suis {$agentName}.\n"
+                . "Bienvenue chez *Daymond*, votre spécialiste en ordinateurs en Côte d'Ivoire.\n\n"
+                . "Je suis là pour vous aider à trouver l'ordinateur idéal selon vos besoins et votre budget.\n"
                 . "Comment puis-je vous appeler ?";
         }
 
@@ -149,7 +149,7 @@ class WebChatController extends Controller
 
         $conversation = Conversation::with('agent')
             ->where('session_token', $token)
-            ->whereNotIn('status', ['confirmed', 'completed', 'abandoned'])
+            ->whereNotIn('status', ['completed', 'abandoned'])
             ->first();
 
         if (!$conversation) {
@@ -178,7 +178,7 @@ class WebChatController extends Controller
                 $claude     = app(ClaudeService::class);
                 $aiResponse = $claude->processMessage($conversation, $validated['message']);
 
-                // Détecter le nouveau format [ORDER_CONFIRMED:{...}] (webchat avec données intégrées)
+                // ── Étape 1 : détecter ORDER_CONFIRMED ───────────────────
                 $embeddedData = [];
                 $confirmed    = false;
 
@@ -187,11 +187,23 @@ class WebChatController extends Controller
                     $embeddedData = json_decode($matches[1], true) ?? [];
                     $cleanText    = trim(preg_replace('/\[ORDER_CONFIRMED:\{.*?\}\]/s', '', $aiResponse));
                 } elseif (str_contains($aiResponse, '[ORDER_CONFIRMED]')) {
-                    // Ancien format (compatibilité) — on appellera extractOrderData
                     $confirmed = true;
                     $cleanText = trim(str_replace('[ORDER_CONFIRMED]', '', $aiResponse));
                 } else {
                     $cleanText = $aiResponse;
+                }
+
+                // ── Étape 2 : détecter QUICK_REPLIES (seulement si pas de confirmation) ──
+                $quickReplies = [];
+                if (!$confirmed && preg_match('/\[QUICK_REPLIES:(\[.*?\])\]/s', $cleanText, $qrMatches)) {
+                    $decoded = json_decode($qrMatches[1], true);
+                    if (is_array($decoded)) {
+                        $quickReplies = array_values(array_slice(
+                            array_filter($decoded, fn($r) => is_string($r) && strlen($r) <= 30),
+                            0, 3
+                        ));
+                    }
+                    $cleanText = trim(preg_replace('/\[QUICK_REPLIES:\[.*?\]\]/s', '', $cleanText));
                 }
 
                 $agentMsg = Message::create([
@@ -203,6 +215,9 @@ class WebChatController extends Controller
                 ]);
 
                 $agentMessage = $this->formatMessage($agentMsg);
+                if (!empty($quickReplies)) {
+                    $agentMessage['quick_replies'] = $quickReplies;
+                }
 
                 if ($confirmed) {
                     $this->handleOrderConfirmed($conversation, $claude, $embeddedData);
@@ -261,6 +276,9 @@ class WebChatController extends Controller
 
         $path = $file->store("webchat/{$conversation->id}", 'public');
         $url  = Storage::url($path);
+        if (!str_starts_with($url, 'http')) {
+            $url = rtrim(config('app.url'), '/') . $url;
+        }
 
         $msg = Message::create([
             'conversation_id' => $conversation->id,
@@ -394,6 +412,36 @@ class WebChatController extends Controller
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    // ── Catalogue produits de l'agent pour la boutique in-chat ───────────────
+
+    public function catalog(string $token): JsonResponse
+    {
+        $conversation = Conversation::with('agent')->where('session_token', $token)->first();
+
+        if (!$conversation) {
+            return response()->json(['error' => 'Session introuvable.'], 404);
+        }
+
+        $agent = $conversation->agent;
+        $products = $agent->products()->where('is_available', true)->get();
+
+        if ($products->isEmpty()) {
+            $products = Product::where('is_available', true)->get();
+        }
+
+        return response()->json([
+            'products' => $products->map(fn($p) => [
+                'id'        => $p->id,
+                'name'      => $p->name,
+                'brand'     => $p->brand,
+                'price'     => $p->formatted_price,
+                'sale_price'=> $p->formatted_sale_price,
+                'image_url' => $p->image_url,
+                'slug'      => $p->slug,
+            ]),
+        ]);
     }
 
     private function findAgentForProduct(Product $product): ?WhatsappAgent

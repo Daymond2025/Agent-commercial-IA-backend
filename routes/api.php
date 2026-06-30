@@ -27,6 +27,7 @@ Route::prefix('chat')->group(function () {
     Route::post('/{token}/message',      [WebChatController::class, 'message'])->middleware('throttle:60,1');
     Route::post('/{token}/upload',       [WebChatController::class, 'upload'])->middleware('throttle:30,1');
     Route::get('/{token}/messages',      [WebChatController::class, 'messages'])->middleware('throttle:120,1');
+    Route::get('/{token}/catalog',       [WebChatController::class, 'catalog'])->middleware('throttle:30,1');
 });
 
 // Routes protégées JWT
