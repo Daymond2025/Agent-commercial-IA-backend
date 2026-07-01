@@ -166,32 +166,35 @@ class ClaudeService
      */
     public function trainAgent(WhatsappAgent $agent): ?string
     {
-        $successfulConvs = $agent->conversations()
-            ->where('status', 'confirmed')
-            ->with(['messages' => fn($q) => $q->orderBy('created_at')->limit(20)])
-            ->orderByDesc('updated_at')
-            ->limit(15)
-            ->get();
-
-        if ($successfulConvs->count() < 3) {
-            return null;
-        }
-
-        $conversationSamples = $successfulConvs->map(function ($conv) {
-            $msgs = $conv->messages->map(fn($m) =>
-                ($m->direction === 'inbound' ? 'Client: ' : 'Agent: ') . $m->content
-            )->implode("\n");
-            return "=== Vente réussie (étape: {$conv->stage}) ===\n{$msgs}";
-        })->implode("\n\n");
-
-        $systemPrompt = "Tu es un expert en formation commerciale pour une boutique d'ordinateurs en Côte d'Ivoire. "
-            . "Analyse les conversations WhatsApp ci-dessous qui ont abouti à des ventes confirmées. "
-            . "Génère une liste d'insights concrets et actionnables (max 10 points) qui aideront l'agent à mieux vendre. "
-            . "Format : bullet points courts, directs, en français. "
-            . "Inclus : objections fréquentes et réponses efficaces, produits populaires et leurs arguments de vente, "
-            . "séquences de questions qui font avancer le client, expressions qui déclenchent la confirmation.";
-
         try {
+            $successfulConvs = $agent->conversations()
+                ->where('status', 'confirmed')
+                ->with(['messages' => fn($q) => $q->orderBy('created_at')->limit(20)])
+                ->orderByDesc('updated_at')
+                ->limit(15)
+                ->get();
+
+            if ($successfulConvs->count() < 3) {
+                return null;
+            }
+
+            $conversationSamples = $successfulConvs->map(function ($conv) {
+                $msgs = $conv->messages->map(function ($m) {
+                    // Nettoie le contenu (supprime les tags binaires [R64:...])
+                    $content = preg_replace('/\[R64:[A-Za-z0-9+\/=]+\]/', '', $m->content ?? '');
+                    $content = preg_replace('/\[[A-Z_]+:[^\]]{0,200}\]/', '', $content);
+                    return ($m->direction === 'inbound' ? 'Client: ' : 'Agent: ') . trim($content);
+                })->filter()->implode("\n");
+                return "=== Vente réussie (étape: {$conv->stage}) ===\n{$msgs}";
+            })->implode("\n\n");
+
+            $systemPrompt = "Tu es un expert en formation commerciale pour une boutique d'ordinateurs en Côte d'Ivoire. "
+                . "Analyse les conversations WhatsApp ci-dessous qui ont abouti à des ventes confirmées. "
+                . "Génère une liste d'insights concrets et actionnables (max 10 points) qui aideront l'agent à mieux vendre. "
+                . "Format : bullet points courts, directs, en français. "
+                . "Inclus : objections fréquentes et réponses efficaces, produits populaires et leurs arguments de vente, "
+                . "séquences de questions qui font avancer le client, expressions qui déclenchent la confirmation.";
+
             $response = Http::withHeaders([
                 'x-api-key'         => $this->apiKey,
                 'anthropic-version' => '2023-06-01',
@@ -285,19 +288,45 @@ PROMPT;
                     . "Si le client ne mentionne pas de produit précis, guide-le vers celui-ci.";
             }
 
+            // PRÉSENTATION PRODUITS WEBCHAT — JAMAIS de liste en texte brut
+            $prompt .= "\n\nPRÉSENTATION PRODUITS WEBCHAT (RÈGLE ABSOLUE) : "
+                . "Ne liste JAMAIS les produits sous forme de texte brut dans tes messages. "
+                . "À la place, utilise ces deux tags selon le contexte :\n"
+                . "1. [SUGGEST_PRODUCTS:ID1,ID2,ID3] → pour suggérer 2 à 3 produits spécifiques adaptés au besoin du client. "
+                . "Choisis les IDs entiers exacts du catalogue. Exemple : [SUGGEST_PRODUCTS:2,5,8]\n"
+                . "2. [SHOW_CATALOG] → pour inviter le client à parcourir tous les produits disponibles.\n"
+                . "Ces tags affichent automatiquement de belles cartes visuelles. "
+                . "Ton texte doit rester court et se concentrer sur la relation client, "
+                . "pas sur la description des produits (les cartes s'en chargent).";
+
+            // FORMULAIRE COLLECTE D'INFOS WEBCHAT
+            $prompt .= "\n\nFORMULAIRE INFOS CLIENT WEBCHAT : Quand tu passes à l'étape customer_info "
+                . "(tu dois collecter nom, téléphone, adresse), termine ton message par [SHOW_INFO_FORM] "
+                . "sur une nouvelle ligne. Ce tag affiche automatiquement un formulaire professionnel au client — "
+                . "NE pose pas les questions une à une, dis juste que le formulaire va s'afficher. "
+                . "Exemple : \"Pour traiter votre commande, veuillez remplir le formulaire ci-dessous.\n[SHOW_INFO_FORM]\"";
+
             // FORMAT DE CONFIRMATION WEBCHAT : inclure les données directement dans le tag
             $prompt .= "\n\nFORMAT IMPORTANT POUR LA CONFIRMATION WEBCHAT : "
                 . "Remplace [ORDER_CONFIRMED] par le tag suivant (JSON compact, sur une ligne séparée, à la fin du message) :\n"
                 . "[ORDER_CONFIRMED:{\"product_id\":ID_NUMERIQUE,\"customer_name\":\"NOM\",\"customer_phone\":\"TELEPHONE\",\"delivery_address\":\"ADRESSE\",\"delivery_city\":\"VILLE\"}]\n"
                 . "Le product_id doit être l'identifiant entier exact du produit dans le catalogue. "
                 . "Remplace chaque valeur par les données réelles collectées durant la conversation.\n\n"
-                . "QUICK REPLIES WEBCHAT : À la fin de certains messages (sauf le message de confirmation), "
+                . "RÉCAPITULATIF VISUEL (étape order_summary) : Quand tu as collecté TOUTES les informations "
+                . "(nom complet, téléphone, adresse de livraison, produit choisi), présente le récapitulatif "
+                . "de commande en ajoutant ce tag sur une nouvelle ligne à la fin de ton message :\n"
+                . "[ORDER_RECAP:{\"product_id\":ID_NUMERIQUE,\"customer_name\":\"NOM\",\"phone\":\"TELEPHONE\","
+                . "\"delivery_address\":\"ADRESSE\",\"delivery_city\":\"VILLE\","
+                . "\"delivery_date\":\"DATE OU Aujourd'hui, dans l'immédiat\","
+                . "\"delivery_fee\":2000,\"tva\":0,\"remise\":0,\"bonuses\":[]}]\n"
+                . "Ce tag génère une belle carte de récapitulatif. N'inclus pas de QUICK_REPLIES dans le même message. "
+                . "Après ce message, attends la confirmation ou modification du client.\n\n"
+                . "QUICK REPLIES WEBCHAT : À la fin de certains messages (sauf récapitulatif et confirmation), "
                 . "tu PEUX ajouter des boutons de réponse rapide sur une nouvelle ligne :\n"
                 . "[QUICK_REPLIES:[\"Texte bouton 1\",\"Texte bouton 2\",\"Texte bouton 3\"]]\n"
                 . "Règles : max 3 boutons, texte court (max 28 caractères chacun). "
-                . "Utilise-les pour les moments clés : choix de produit, confirmation de commande, ville de livraison, budget. "
-                . "Exemples : [\"Oui, je confirme !\",\"Modifier l'adresse\",\"Annuler\"] — "
-                . "[\"Moins de 500 000 F\",\"500k–1M F\",\"Plus d'1M F\"] — "
+                . "Utilise-les pour les moments clés : choix de produit, ville de livraison, budget. "
+                . "Exemples : [\"Moins de 500 000 F\",\"500k–1M F\",\"Plus d'1M F\"] — "
                 . "[\"Abidjan\",\"Bouaké\",\"San Pedro\"]";
         }
 

@@ -170,7 +170,11 @@ class WebChatController extends Controller
             'window_expires_at' => now()->addHours(24),
         ]);
 
-        $agentMessage = null;
+        $agentMessage       = null;
+        $orderRecap         = null;
+        $showInfoForm       = false;
+        $productSuggestions = null;
+        $showCatalog        = false;
 
         // Traitement IA SYNCHRONE — réponse incluse dans la même requête
         if ($conversation->ai_active) {
@@ -193,9 +197,85 @@ class WebChatController extends Controller
                     $cleanText = $aiResponse;
                 }
 
-                // ── Étape 2 : détecter QUICK_REPLIES (seulement si pas de confirmation) ──
+                // ── Étape 2 : détecter ORDER_RECAP (uniquement si pas encore confirmé) ──
+                if (!$confirmed && preg_match('/\[ORDER_RECAP:(\{.*?\})\]/s', $cleanText, $recapMatches)) {
+                    $recapData = json_decode($recapMatches[1], true) ?? [];
+                    $cleanText = trim(preg_replace('/\[ORDER_RECAP:\{.*?\}\]/s', '', $cleanText));
+
+                    if (!empty($recapData['product_id'])) {
+                        $rProduct = Product::find((int) $recapData['product_id']);
+                        if ($rProduct) {
+                            $price       = (float) ($rProduct->sale_price ?? $rProduct->price ?? 0);
+                            $deliveryFee = (int)   ($recapData['delivery_fee'] ?? 2000);
+                            $tva         = (int)   ($recapData['tva']          ?? 0);
+                            $remise      = (int)   ($recapData['remise']       ?? 0);
+                            $total       = $price + $deliveryFee + $tva - $remise;
+                            $fmt         = fn($n) => number_format((int) $n, 0, ',', ' ') . ' FCFA';
+
+                            $addr        = trim(($recapData['delivery_address'] ?? '') . ', ' . ($recapData['delivery_city'] ?? ''), ' ,');
+
+                            $orderRecap = [
+                                'product_name'     => $rProduct->name,
+                                'product_image'    => $rProduct->image_url,
+                                'price'            => $fmt($price),
+                                'customer_name'    => $recapData['customer_name'] ?? '',
+                                'delivery_address' => $addr,
+                                'phone'            => $recapData['phone'] ?? ($recapData['customer_phone'] ?? ''),
+                                'delivery_date'    => $recapData['delivery_date'] ?? "Aujourd'hui, dans l'immédiat",
+                                'delivery_fee'     => $deliveryFee,
+                                'tva'              => $tva,
+                                'remise'           => $remise,
+                                'total'            => $fmt($total),
+                                'bonuses'          => is_array($recapData['bonuses'] ?? null) ? $recapData['bonuses'] : [],
+                                'currency'         => 'FCFA',
+                            ];
+                        }
+                    }
+                }
+
+                // ── Étape 2b : sauvegarder recap enrichi dans le contenu (persistence reload) ──
+                if ($orderRecap !== null) {
+                    $encoded    = base64_encode(json_encode($orderRecap, JSON_UNESCAPED_UNICODE));
+                    $cleanText .= "\n[R64:{$encoded}]";
+                }
+
+                // ── Étape 2c : détecter SHOW_INFO_FORM ───────────────────────────────────────
+                if (str_contains($cleanText, '[SHOW_INFO_FORM]')) {
+                    $showInfoForm = true;
+                    $cleanText    = trim(str_replace('[SHOW_INFO_FORM]', '', $cleanText));
+                }
+
+                // ── Étape 2d : détecter SUGGEST_PRODUCTS ─────────────────────────────────────
+                if (!$confirmed && preg_match('/\[SUGGEST_PRODUCTS:([\d,\s]+)\]/i', $cleanText, $spMatches)) {
+                    $ids     = array_filter(array_map('intval', explode(',', $spMatches[1])));
+                    $cleanText = trim(preg_replace('/\[SUGGEST_PRODUCTS:[\d,\s]+\]/i', '', $cleanText));
+                    if (!empty($ids)) {
+                        $spProducts = Product::whereIn('id', array_values($ids))
+                            ->where('is_available', true)
+                            ->get();
+                        if ($spProducts->isNotEmpty()) {
+                            $productSuggestions = $spProducts->map(fn($p) => [
+                                'id'        => $p->id,
+                                'name'      => $p->name,
+                                'brand'     => $p->brand ?? '',
+                                'price'     => $p->formatted_price,
+                                'sale_price'=> $p->formatted_sale_price,
+                                'image_url' => $p->image_url,
+                                'slug'      => $p->slug,
+                            ])->values()->toArray();
+                        }
+                    }
+                }
+
+                // ── Étape 2e : détecter SHOW_CATALOG ─────────────────────────────────────────
+                if (!$confirmed && str_contains($cleanText, '[SHOW_CATALOG]')) {
+                    $showCatalog = true;
+                    $cleanText   = trim(str_replace('[SHOW_CATALOG]', '', $cleanText));
+                }
+
+                // ── Étape 3 : détecter QUICK_REPLIES (désactivé si recap ou confirmation) ──
                 $quickReplies = [];
-                if (!$confirmed && preg_match('/\[QUICK_REPLIES:(\[.*?\])\]/s', $cleanText, $qrMatches)) {
+                if (!$confirmed && $orderRecap === null && preg_match('/\[QUICK_REPLIES:(\[.*?\])\]/s', $cleanText, $qrMatches)) {
                     $decoded = json_decode($qrMatches[1], true);
                     if (is_array($decoded)) {
                         $quickReplies = array_values(array_slice(
@@ -242,9 +322,13 @@ class WebChatController extends Controller
         }
 
         return response()->json([
-            'id'            => $clientMsg->id,
-            'status'        => 'received',
-            'agent_message' => $agentMessage,
+            'id'                  => $clientMsg->id,
+            'status'              => 'received',
+            'agent_message'       => $agentMessage,
+            'order_recap'         => $orderRecap,
+            'show_info_form'      => $showInfoForm,
+            'product_suggestions' => $productSuggestions,
+            'show_catalog'        => $showCatalog,
         ], 201);
     }
 
@@ -257,7 +341,7 @@ class WebChatController extends Controller
         ]);
 
         $conversation = Conversation::where('session_token', $token)
-            ->whereNotIn('status', ['confirmed', 'completed', 'abandoned'])
+            ->whereNotIn('status', ['completed', 'abandoned'])
             ->first();
 
         if (!$conversation) {
