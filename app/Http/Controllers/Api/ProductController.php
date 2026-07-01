@@ -38,7 +38,7 @@ class ProductController extends Controller
 
         if ($request->hasFile('image')) {
             $path = $request->file('image')->store('products/images', 'public');
-            $validated['image_url'] = Storage::url($path);
+            $validated['image_url'] = $this->absoluteStorageUrl($request, $path);
         }
 
         unset($validated['image']);
@@ -74,7 +74,7 @@ class ProductController extends Controller
                 Storage::disk('public')->delete(str_replace('/storage/', '', $product->image_url));
             }
             $path = $request->file('image')->store('products/images', 'public');
-            $validated['image_url'] = Storage::url($path);
+            $validated['image_url'] = $this->absoluteStorageUrl($request, $path);
         }
 
         unset($validated['image']);
@@ -93,5 +93,16 @@ class ProductController extends Controller
         $product->delete();
 
         return response()->json(['message' => 'Produit supprimé']);
+    }
+
+    /**
+     * Storage::url() dépend de APP_URL et peut renvoyer un chemin relatif
+     * si mal configuré côté serveur — on force une URL absolue basée sur
+     * l'hôte réel de la requête pour rester correct dans tous les cas.
+     */
+    private function absoluteStorageUrl(Request $request, string $path): string
+    {
+        $url = Storage::url($path);
+        return str_starts_with($url, 'http') ? $url : $request->getSchemeAndHttpHost() . $url;
     }
 }

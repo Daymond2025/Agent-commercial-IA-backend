@@ -103,7 +103,7 @@ class WebChatController extends Controller
                 . "Comment puis-je vous appeler ?";
         } else {
             $welcome = "Bonjour, je suis {$agentName}.\n"
-                . "Bienvenue chez *Daymond*, votre spécialiste en ordinateurs en Côte d'Ivoire.\n\n"
+                . "Bienvenue chez *WhatsApp Shop*, votre spécialiste en ordinateurs en Côte d'Ivoire.\n\n"
                 . "Je suis là pour vous aider à trouver l'ordinateur idéal selon vos besoins et votre budget.\n"
                 . "Comment puis-je vous appeler ?";
         }
@@ -336,57 +336,152 @@ class WebChatController extends Controller
 
     public function upload(Request $request, string $token): JsonResponse
     {
-        $request->validate([
-            'file' => 'required|file|max:20480', // 20 Mo max
-        ]);
+        try {
+            $request->validate([
+                'file' => 'required|file|max:20480', // 20 Mo max
+            ]);
 
-        $conversation = Conversation::where('session_token', $token)
-            ->whereNotIn('status', ['completed', 'abandoned'])
-            ->first();
+            $conversation = Conversation::where('session_token', $token)
+                ->whereNotIn('status', ['completed', 'abandoned'])
+                ->first();
 
-        if (!$conversation) {
-            return response()->json(['error' => 'Session introuvable.'], 404);
+            if (!$conversation) {
+                return response()->json(['error' => 'Session introuvable.'], 404);
+            }
+
+            $file = $request->file('file');
+
+            // PHP finfo classe parfois audio/webm comme video/webm — on préfère le MIME client pour l'audio
+            $finfoMime  = $file->getMimeType() ?? '';
+            $clientMime = strtolower(explode(';', $file->getClientMimeType() ?? '')[0]);
+            $mime       = $finfoMime ?: $clientMime;
+
+            // Si finfo dit video/ mais le client déclare audio/, on fait confiance au client
+            if (str_starts_with($clientMime, 'audio/') && str_starts_with($mime, 'video/')) {
+                $mime = $clientMime;
+            }
+
+            // Fallback par extension du nom de fichier si le MIME reste inconnu
+            if (!$mime || $mime === 'application/octet-stream') {
+                $ext  = strtolower(pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION));
+                $mime = match($ext) {
+                    'jpg', 'jpeg' => 'image/jpeg',
+                    'png'         => 'image/png',
+                    'gif'         => 'image/gif',
+                    'webp'        => 'image/webp',
+                    'bmp'         => 'image/bmp',
+                    'mp3'         => 'audio/mpeg',
+                    'ogg'         => 'audio/ogg',
+                    'webm'        => 'audio/webm',
+                    'wav'         => 'audio/wav',
+                    'aac', 'm4a'  => 'audio/aac',
+                    'mp4'         => 'video/mp4',
+                    default       => 'application/octet-stream',
+                };
+            }
+
+            $type = match (true) {
+                str_starts_with($mime, 'image/') => 'image',
+                str_starts_with($mime, 'audio/') => 'audio',
+                str_starts_with($mime, 'video/') => 'video',
+                default                           => 'file',
+            };
+
+            $path = $file->store("webchat/{$conversation->id}", 'public');
+
+            if ($path === false) {
+                Log::error('Upload store() returned false', ['token' => $token, 'mime' => $mime]);
+                return response()->json(['error' => 'Impossible de sauvegarder le fichier. Vérifiez les permissions storage.'], 500);
+            }
+
+            // URL servie via l'endpoint dédié — indépendant du symlink storage:link et de APP_URL
+            $url = secure_url("api/chat/media/{$token}/" . basename($path));
+
+            $msg = Message::create([
+                'conversation_id' => $conversation->id,
+                'direction'       => 'inbound',
+                'type'            => $type,
+                'content'         => json_encode([
+                    'url'  => $url,
+                    'name' => $file->getClientOriginalName(),
+                    'size' => $file->getSize(),
+                ]),
+                'status'          => 'delivered',
+            ]);
+
+            $conversation->update(['last_message_at' => now()]);
+
+            // ── Réponse IA après upload (vision pour images, texte pour audio/fichier) ──
+            $agentMessage = null;
+            if ($conversation->ai_active) {
+                try {
+                    $claude      = app(ClaudeService::class);
+                    $aiResponse  = $claude->processUpload($conversation, $type, $path, $mime);
+
+                    // Extraire les quick replies si présents
+                    $quickReplies = [];
+                    if (preg_match('/\[QUICK_REPLIES:(\[.*?\])\]/s', $aiResponse, $qrMatch)) {
+                        $decoded = json_decode($qrMatch[1], true);
+                        if (is_array($decoded)) {
+                            $quickReplies = array_values(array_slice(
+                                array_filter($decoded, fn($r) => is_string($r) && strlen($r) <= 30),
+                                0, 3
+                            ));
+                        }
+                    }
+
+                    // Nettoyer les tags pour le stockage
+                    $cleanText = trim(preg_replace('/\[QUICK_REPLIES:\[.*?\]\]/s', '', $aiResponse));
+                    $cleanText = trim(preg_replace('/\[[A-Z_]+:[^\]]{0,200}\]/', '', $cleanText));
+
+                    if ($cleanText) {
+                        $agentMsg = Message::create([
+                            'conversation_id' => $conversation->id,
+                            'direction'       => 'outbound',
+                            'type'            => 'text',
+                            'content'         => $cleanText,
+                            'status'          => 'sent',
+                        ]);
+                        $agentMessage = [
+                            'id'         => $agentMsg->id,
+                            'direction'  => 'outbound',
+                            'content'    => $cleanText,
+                            'type'       => 'text',
+                            'status'     => 'sent',
+                            'created_at' => $agentMsg->created_at,
+                        ];
+                        if (!empty($quickReplies)) {
+                            $agentMessage['quick_replies'] = $quickReplies;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    Log::error('Upload AI response failed', [
+                        'token' => $token,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            return response()->json([
+                'id'            => $msg->id,
+                'type'          => $type,
+                'url'           => $url,
+                'name'          => $file->getClientOriginalName(),
+                'direction'     => 'inbound',
+                'status'        => 'delivered',
+                'created_at'    => $msg->created_at,
+                'agent_message' => $agentMessage,
+            ], 201);
+
+        } catch (\Throwable $e) {
+            Log::error('Upload failed', [
+                'token' => $token,
+                'error' => $e->getMessage(),
+                'file'  => $e->getFile(),
+                'line'  => $e->getLine(),
+            ]);
+            return response()->json(['error' => 'Erreur lors de l\'envoi du fichier. Veuillez réessayer.'], 500);
         }
-
-        $file = $request->file('file');
-        $mime = $file->getMimeType() ?? '';
-
-        $type = match (true) {
-            str_starts_with($mime, 'image/') => 'image',
-            str_starts_with($mime, 'audio/') => 'audio',
-            str_starts_with($mime, 'video/') => 'video',
-            default                           => 'file',
-        };
-
-        $path = $file->store("webchat/{$conversation->id}", 'public');
-        $url  = Storage::url($path);
-        if (!str_starts_with($url, 'http')) {
-            $url = rtrim(config('app.url'), '/') . $url;
-        }
-
-        $msg = Message::create([
-            'conversation_id' => $conversation->id,
-            'direction'       => 'inbound',
-            'type'            => $type,
-            'content'         => json_encode([
-                'url'  => $url,
-                'name' => $file->getClientOriginalName(),
-                'size' => $file->getSize(),
-            ]),
-            'status'          => 'delivered',
-        ]);
-
-        $conversation->update(['last_message_at' => now()]);
-
-        return response()->json([
-            'id'         => $msg->id,
-            'type'       => $type,
-            'url'        => $url,
-            'name'       => $file->getClientOriginalName(),
-            'direction'  => 'inbound',
-            'status'     => 'delivered',
-            'created_at' => $msg->created_at,
-        ], 201);
     }
 
     // ── Polling messages ──────────────────────────────────────────────────────
@@ -526,6 +621,22 @@ class WebChatController extends Controller
                 'slug'      => $p->slug,
             ]),
         ]);
+    }
+
+    // ── Servir un fichier uploadé via endpoint dédié (pas de symlink requis) ─────
+
+    public function serveMedia(string $token, string $filename): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $conversation = Conversation::where('session_token', $token)->firstOrFail();
+
+        // basename() pour éviter toute traversée de répertoire
+        $path = 'webchat/' . $conversation->id . '/' . basename($filename);
+
+        if (!Storage::disk('public')->exists($path)) {
+            abort(404);
+        }
+
+        return Storage::disk('public')->response($path);
     }
 
     private function findAgentForProduct(Product $product): ?WhatsappAgent

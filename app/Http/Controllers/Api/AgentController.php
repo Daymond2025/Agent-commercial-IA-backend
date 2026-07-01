@@ -41,7 +41,10 @@ class AgentController extends Controller
             'instructions'   => 'nullable|string',
             'knowledge_base' => 'nullable|string',
             'website_url'    => 'nullable|url',
-            'avatar'         => 'nullable|image|max:2048',
+            'avatar'         => 'nullable|image|max:4096',
+        ], [
+            'avatar.image' => "Le fichier envoyé n'est pas une image valide.",
+            'avatar.max'   => "L'image de profil ne doit pas dépasser 4 Mo.",
         ]);
 
         // persona peut arriver comme string JSON (multipart)
@@ -51,7 +54,7 @@ class AgentController extends Controller
 
         if ($request->hasFile('avatar')) {
             $path = $request->file('avatar')->store('agents/avatars', 'public');
-            $validated['avatar_url'] = Storage::url($path);
+            $validated['avatar_url'] = $this->absoluteStorageUrl($request, $path);
         }
 
         unset($validated['avatar']);
@@ -72,7 +75,10 @@ class AgentController extends Controller
             'instructions'   => 'nullable|string',
             'knowledge_base' => 'nullable|string',
             'website_url'    => 'nullable|url',
-            'avatar'         => 'nullable|image|max:2048',
+            'avatar'         => 'nullable|image|max:4096',
+        ], [
+            'avatar.image' => "Le fichier envoyé n'est pas une image valide.",
+            'avatar.max'   => "L'image de profil ne doit pas dépasser 4 Mo.",
         ]);
 
         if (isset($validated['persona']) && is_string($validated['persona'])) {
@@ -85,7 +91,7 @@ class AgentController extends Controller
                 Storage::disk('public')->delete(str_replace('/storage/', '', $agent->avatar_url));
             }
             $path = $request->file('avatar')->store('agents/avatars', 'public');
-            $validated['avatar_url'] = Storage::url($path);
+            $validated['avatar_url'] = $this->absoluteStorageUrl($request, $path);
         }
 
         unset($validated['avatar']);
@@ -210,6 +216,17 @@ class AgentController extends Controller
     {
         $agent->update(['is_active' => false]);
         return response()->json(['message' => 'Agent désactivé']);
+    }
+
+    /**
+     * Storage::url() dépend de APP_URL et peut renvoyer un chemin relatif
+     * si mal configuré côté serveur — on force une URL absolue basée sur
+     * l'hôte réel de la requête pour rester correct dans tous les cas.
+     */
+    private function absoluteStorageUrl(Request $request, string $path): string
+    {
+        $url = Storage::url($path);
+        return str_starts_with($url, 'http') ? $url : $request->getSchemeAndHttpHost() . $url;
     }
 
     private function extractPdfText(string $filePath): string

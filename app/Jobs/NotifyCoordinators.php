@@ -71,7 +71,7 @@ class NotifyCoordinators implements ShouldQueue
         $o = $this->order;
         $product = $o->product;
 
-        return "🛒 *NOUVELLE COMMANDE DAYMOND*\n\n"
+        return "🛒 *NOUVELLE COMMANDE WHATSAPP SHOP*\n\n"
             . "📋 Réf: *{$o->reference}*\n"
             . "👤 Client: {$o->customer_name}\n"
             . "📱 Tél: {$o->customer_phone}\n"

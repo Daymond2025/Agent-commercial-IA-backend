@@ -22,12 +22,13 @@ Route::post('/auth/login', [AuthController::class, 'login']);
 
 // ── WebChat public (sans JWT) ─────────────────────────────────────────────
 Route::prefix('chat')->group(function () {
-    Route::get('/product/{identifier}',  [WebChatController::class, 'product']);
-    Route::post('/start',                [WebChatController::class, 'start'])->middleware('throttle:20,1');
-    Route::post('/{token}/message',      [WebChatController::class, 'message'])->middleware('throttle:60,1');
-    Route::post('/{token}/upload',       [WebChatController::class, 'upload'])->middleware('throttle:30,1');
-    Route::get('/{token}/messages',      [WebChatController::class, 'messages'])->middleware('throttle:120,1');
-    Route::get('/{token}/catalog',       [WebChatController::class, 'catalog'])->middleware('throttle:30,1');
+    Route::get('/product/{identifier}',     [WebChatController::class, 'product']);
+    Route::get('/media/{token}/{filename}', [WebChatController::class, 'serveMedia'])->middleware('throttle:300,1');
+    Route::post('/start',                   [WebChatController::class, 'start'])->middleware('throttle:60,1');
+    Route::post('/{token}/message',         [WebChatController::class, 'message'])->middleware('throttle:300,1');
+    Route::post('/{token}/upload',          [WebChatController::class, 'upload'])->middleware('throttle:120,1');
+    Route::get('/{token}/messages',         [WebChatController::class, 'messages'])->middleware('throttle:600,1');
+    Route::get('/{token}/catalog',          [WebChatController::class, 'catalog'])->middleware('throttle:120,1');
 });
 
 // Routes protégées JWT

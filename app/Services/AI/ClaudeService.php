@@ -81,7 +81,7 @@ class ClaudeService
             ? "{$elapsed} minutes"
             : round($elapsed / 60) . ' heures';
 
-        $systemPrompt = "Tu es {$agentName}, agent commercial de Daymond (vente d'ordinateurs en Côte d'Ivoire). "
+        $systemPrompt = "Tu es {$agentName}, agent commercial de WhatsApp Shop (vente d'ordinateurs en Côte d'Ivoire). "
             . "Tu dois générer UN SEUL message de relance WhatsApp court (maximum 2 phrases) et chaleureux. "
             . "N'utilise pas de formule d'intro générique. Sois naturel, direct et cordial. "
             . "Ne mentionne JAMAIS que tu es une IA.";
@@ -230,10 +230,10 @@ class ClaudeService
         })->implode("\n");
 
         // ---------------------------------------------------------------
-        // PROMPT DE BASE — identité Daymond, toujours présent
+        // PROMPT DE BASE — identité WhatsApp Shop, toujours présent
         // ---------------------------------------------------------------
         $prompt = <<<PROMPT
-Tu es {$agentName}, agent commercial virtuel de Daymond, une entreprise spécialisée dans la vente d'ordinateurs en Côte d'Ivoire.
+Tu es {$agentName}, agent commercial virtuel de WhatsApp Shop, une entreprise spécialisée dans la vente d'ordinateurs en Côte d'Ivoire.
 
 RÈGLES STRICTES :
 - Réponds TOUJOURS en français, de manière professionnelle et sobre
@@ -360,15 +360,110 @@ PROMPT;
         return $query->get()->map->toAgentContext()->toArray();
     }
 
+    /**
+     * Traite un fichier uploadé par le client (image via vision, audio via texte descriptif).
+     */
+    public function processUpload(Conversation $conversation, string $type, string $path, string $mime): string
+    {
+        if ($type === 'image') {
+            try {
+                $imageData = \Illuminate\Support\Facades\Storage::disk('public')->get($path);
+                if ($imageData) {
+                    return $this->processMessageWithVision($conversation, base64_encode($imageData), $mime ?: 'image/jpeg');
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Vision read failed, falling back to text', ['error' => $e->getMessage()]);
+            }
+        }
+
+        $descriptions = [
+            'audio' => "Le client vient d'envoyer un message vocal. Continue la conversation de façon naturelle et professionnelle en tenant compte du contexte actuel. Pose-lui une question pertinente ou propose-lui de l'aide selon l'étape de la vente. Ne mentionne pas que tu ne peux pas écouter l'audio.",
+            'video' => "Le client a envoyé une vidéo. Continue la conversation naturellement.",
+            'file'  => "Le client a envoyé un document. Continue la conversation naturellement.",
+            'image' => "Le client a envoyé une image. Continue la conversation naturellement.",
+        ];
+
+        return $this->processMessage($conversation, $descriptions[$type] ?? "Le client a envoyé un fichier.");
+    }
+
+    /**
+     * Appel Claude API avec une image en base64 (vision).
+     */
+    private function processMessageWithVision(Conversation $conversation, string $imageBase64, string $mimeType): string
+    {
+        $history      = $this->getConversationHistory($conversation->id);
+        $products     = $this->getAgentProducts($conversation->agent);
+        $systemPrompt = $this->buildSystemPrompt($conversation, $products);
+
+        // Ajouter l'image comme dernier message utilisateur
+        $history[] = [
+            'role'    => 'user',
+            'content' => [
+                [
+                    'type'   => 'image',
+                    'source' => [
+                        'type'       => 'base64',
+                        'media_type' => $mimeType,
+                        'data'       => $imageBase64,
+                    ],
+                ],
+                [
+                    'type' => 'text',
+                    'text' => 'Le client a envoyé cette image.',
+                ],
+            ],
+        ];
+
+        try {
+            $response = Http::withHeaders([
+                'x-api-key'         => $this->apiKey,
+                'anthropic-version' => '2023-06-01',
+                'content-type'      => 'application/json',
+            ])->timeout(30)->post("{$this->baseUrl}/messages", [
+                'model'    => $this->model,
+                'max_tokens' => 1024,
+                'system'   => $systemPrompt,
+                'messages' => $history,
+            ]);
+
+            if ($response->failed()) {
+                Log::error('Claude Vision API error', ['body' => $response->json()]);
+                return $this->processMessage($conversation, "Le client a envoyé une image.");
+            }
+
+            return $response->json('content.0.text');
+        } catch (\Exception $e) {
+            Log::error('Vision processing failed', ['error' => $e->getMessage()]);
+            return $this->processMessage($conversation, "Le client a envoyé une image.");
+        }
+    }
+
     private function getConversationHistory(int $conversationId): array
     {
         return Message::where('conversation_id', $conversationId)
             ->orderBy('created_at')
             ->get()
-            ->map(fn($msg) => [
-                'role'    => $msg->direction === 'inbound' ? 'user' : 'assistant',
-                'content' => $msg->content,
-            ])
+            ->map(function ($msg) {
+                // Remplace le contenu JSON des médias par une description lisible
+                if ($msg->type !== 'text') {
+                    $desc = match($msg->type) {
+                        'image' => '[image envoyée par le client]',
+                        'audio' => '[message vocal envoyé par le client]',
+                        'video' => '[vidéo envoyée par le client]',
+                        default => '[fichier envoyé par le client]',
+                    };
+                    return ['role' => 'user', 'content' => $desc];
+                }
+                // Nettoie les tags binaires du contenu texte
+                $content = preg_replace('/\[R64:[A-Za-z0-9+\/=]+\]/', '', $msg->content ?? '');
+                $content = trim($content);
+                return [
+                    'role'    => $msg->direction === 'inbound' ? 'user' : 'assistant',
+                    'content' => $content,
+                ];
+            })
+            ->filter(fn($msg) => $msg['content'] !== '')
+            ->values()
             ->toArray();
     }
 

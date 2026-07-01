@@ -45,7 +45,7 @@ class SendFollowups implements ShouldQueue
 
         $messages = [
             'relance_j0' => "Bonjour {$name} ! 😊 Avez-vous des questions sur nos ordinateurs ? Je suis là pour vous aider à faire le meilleur choix.",
-            'relance_j1' => "Bonjour {$name} ! Notre catalogue d'ordinateurs Daymond vous attend. Souhaitez-vous que je vous présente nos meilleures offres du moment ?",
+            'relance_j1' => "Bonjour {$name} ! Notre catalogue d'ordinateurs WhatsApp Shop vous attend. Souhaitez-vous que je vous présente nos meilleures offres du moment ?",
             'relance_j3' => "Bonjour {$name} ! 🖥️ Nos stocks sont limités. Voulez-vous finaliser votre commande avant qu'il ne soit trop tard ?",
         ];
 
