@@ -11,7 +11,7 @@ class Product extends Model
 {
     protected $fillable = [
         'name', 'slug', 'brand', 'description', 'price', 'sale_price', 'currency',
-        'specs', 'image_url', 'is_available', 'stock',
+        'specs', 'image_url', 'images', 'is_available', 'stock',
     ];
 
     protected static function boot(): void
@@ -34,6 +34,7 @@ class Product extends Model
 
     protected $casts = [
         'specs'       => 'array',
+        'images'      => 'array',
         'is_available' => 'boolean',
         'price'       => 'decimal:2',
         'sale_price'  => 'decimal:2',
