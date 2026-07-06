@@ -8,7 +8,10 @@ use App\Models\WhatsappAgent;
 use App\Services\AI\ClaudeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Smalot\PdfParser\Parser as PdfParser;
 
 class AgentController extends Controller
 {
@@ -87,8 +90,8 @@ class AgentController extends Controller
 
         if ($request->hasFile('avatar')) {
             // Supprime l'ancienne si c'était un fichier uploadé
-            if ($agent->avatar_url && str_starts_with($agent->avatar_url, '/storage/')) {
-                Storage::disk('public')->delete(str_replace('/storage/', '', $agent->avatar_url));
+            if ($agent->avatar_url) {
+                $this->deleteIfInternal($agent->avatar_url);
             }
             $path = $request->file('avatar')->store('agents/avatars', 'public');
             $validated['avatar_url'] = $this->absoluteStorageUrl($request, $path);
@@ -229,28 +232,32 @@ class AgentController extends Controller
         return str_starts_with($url, 'http') ? $url : $request->getSchemeAndHttpHost() . $url;
     }
 
-    private function extractPdfText(string $filePath): string
+    /**
+     * Supprime le fichier du disque public si l'URL pointe vers du stockage
+     * interne (absolue ou relative) ; ignore silencieusement les URLs externes.
+     */
+    private function deleteIfInternal(string $url): void
     {
-        // Extraction basique PDF en PHP pur (sans dépendance externe)
-        // Lit les flux de texte bruts du PDF
-        $content = file_get_contents($filePath);
-        $text    = '';
-
-        // Extraction des blocs de texte PDF (BT...ET)
-        preg_match_all('/BT\s*(.*?)\s*ET/s', $content, $matches);
-        foreach ($matches[1] as $block) {
-            preg_match_all('/\((.*?)\)\s*Tj/s', $block, $strings);
-            foreach ($strings[1] as $str) {
-                $text .= $str . ' ';
-            }
-            preg_match_all('/\[(.*?)\]\s*TJ/s', $block, $arrStrings);
-            foreach ($arrStrings[1] as $arrStr) {
-                preg_match_all('/\((.*?)\)/', $arrStr, $parts);
-                $text .= implode('', $parts[1]) . ' ';
-            }
+        if (!str_contains($url, '/storage/')) {
+            return;
         }
 
-        $text = preg_replace('/\s+/', ' ', $text);
-        return trim($text) ?: '[PDF non lisible — texte non extractible automatiquement]';
+        Storage::disk('public')->delete(Str::after($url, '/storage/'));
+    }
+
+    private function extractPdfText(string $filePath): string
+    {
+        // La plupart des PDF réels compressent leurs flux de contenu (FlateDecode) :
+        // un parsing regex sur les octets bruts ne peut pas les lire. On utilise
+        // smalot/pdfparser, qui décompresse et décode correctement le texte.
+        try {
+            $parser = new PdfParser();
+            $text   = trim($parser->parseFile($filePath)->getText());
+
+            return $text !== '' ? $text : '[PDF non lisible — aucun texte extractible (probablement un scan/image)]';
+        } catch (\Throwable $e) {
+            Log::warning('PDF extraction failed', ['file' => $filePath, 'error' => $e->getMessage()]);
+            return '[PDF non lisible — erreur lors de l\'extraction]';
+        }
     }
 }

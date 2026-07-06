@@ -42,6 +42,7 @@ class WebChatController extends Controller
                 'price'       => $product->formatted_price,
                 'sale_price'  => $product->formatted_sale_price,
                 'image_url'   => $product->image_url,
+                'images'      => $product->images ?: array_filter([$product->image_url]),
                 'slug'        => $product->slug,
                 'specs'       => $product->specs,
             ] : null,
@@ -135,6 +136,7 @@ class WebChatController extends Controller
                 'price'      => $product->formatted_price,
                 'sale_price' => $product->formatted_sale_price,
                 'image_url'  => $product->image_url,
+                'images'     => $product->images ?: array_filter([$product->image_url]),
             ] : null,
         ], 201);
     }
@@ -255,13 +257,16 @@ class WebChatController extends Controller
                             ->get();
                         if ($spProducts->isNotEmpty()) {
                             $productSuggestions = $spProducts->map(fn($p) => [
-                                'id'        => $p->id,
-                                'name'      => $p->name,
-                                'brand'     => $p->brand ?? '',
-                                'price'     => $p->formatted_price,
-                                'sale_price'=> $p->formatted_sale_price,
-                                'image_url' => $p->image_url,
-                                'slug'      => $p->slug,
+                                'id'          => $p->id,
+                                'name'        => $p->name,
+                                'brand'       => $p->brand ?? '',
+                                'description' => $p->description,
+                                'price'       => $p->formatted_price,
+                                'sale_price'  => $p->formatted_sale_price,
+                                'image_url'   => $p->image_url,
+                                'images'      => $p->images ?: array_filter([$p->image_url]),
+                                'specs'       => $p->specs,
+                                'slug'        => $p->slug,
                             ])->values()->toArray();
                         }
                     }
@@ -618,6 +623,7 @@ class WebChatController extends Controller
                 'price'     => $p->formatted_price,
                 'sale_price'=> $p->formatted_sale_price,
                 'image_url' => $p->image_url,
+                'images'    => $p->images ?: array_filter([$p->image_url]),
                 'slug'      => $p->slug,
             ]),
         ]);
