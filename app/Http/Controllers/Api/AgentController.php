@@ -180,6 +180,26 @@ class AgentController extends Controller
     }
 
     /**
+     * Vide entièrement la base de connaissances d'un agent : supprime les
+     * documents importés (fichiers + lignes) et réinitialise knowledge_base.
+     * Utile après une correction de l'extraction PDF pour repartir propre
+     * plutôt que d'accumuler d'anciennes entrées illisibles.
+     */
+    public function clearKnowledge(WhatsappAgent $agent): JsonResponse
+    {
+        $documents = AgentDocument::where('whatsapp_agent_id', $agent->id)->get();
+
+        foreach ($documents as $doc) {
+            Storage::disk('public')->delete($doc->file_path);
+        }
+
+        AgentDocument::where('whatsapp_agent_id', $agent->id)->delete();
+        $agent->update(['knowledge_base' => null]);
+
+        return response()->json(['message' => 'Base de connaissances vidée.']);
+    }
+
+    /**
      * Liste des documents uploadés pour un agent.
      */
     public function documents(WhatsappAgent $agent): JsonResponse

@@ -267,7 +267,14 @@ PROMPT;
         // BASE DE CONNAISSANCES
         // ---------------------------------------------------------------
         if (!empty($agent->knowledge_base)) {
-            $prompt .= "\n\nBASE DE CONNAISSANCES :\n{$agent->knowledge_base}";
+            $prompt .= "\n\nBASE DE CONNAISSANCES (RÈGLE ABSOLUE) :\n"
+                . "Les informations ci-dessous proviennent de documents fournis par l'entreprise "
+                . "(FAQ, conditions de livraison, garanties, procédures, argumentaire commercial...). "
+                . "Tu DOIS les utiliser en priorité pour répondre aux questions du client dès qu'elles "
+                . "sont pertinentes — livraison, garantie, paiement, retours, spécifications, politique de l'entreprise, etc. "
+                . "Ne réponds JAMAIS \"je ne sais pas\" ou de façon vague si l'information se trouve ci-dessous. "
+                . "Base-toi sur ces informations plutôt que sur des suppositions générales.\n\n"
+                . "{$agent->knowledge_base}";
         }
 
         // ---------------------------------------------------------------
@@ -298,6 +305,17 @@ PROMPT;
                 . "Ces tags affichent automatiquement de belles cartes visuelles. "
                 . "Ton texte doit rester court et se concentrer sur la relation client, "
                 . "pas sur la description des produits (les cartes s'en chargent).";
+
+            // ENVOI D'IMAGES — CAPACITÉ RÉELLE, NE JAMAIS PRÉTENDRE LE CONTRAIRE
+            $prompt .= "\n\nDEMANDE DE PHOTOS/IMAGES (RÈGLE ABSOLUE) : "
+                . "Tu PEUX montrer de vraies photos des produits — ne dis JAMAIS que c'est impossible, "
+                . "que tu ne peux pas envoyer d'images, ou toute phrase similaire (\"techniquement impossible\", "
+                . "\"je ne peux pas partager d'images\", etc.). C'est FAUX et interdit de le dire. "
+                . "Dès que le client demande à voir une photo, une image, à quoi ressemble un produit, "
+                . "ou plus de visuels, réponds par une courte phrase d'accompagnement et utilise "
+                . "immédiatement [SUGGEST_PRODUCTS:ID] avec l'ID du produit concerné (celui dont vous parlez, "
+                . "ou le produit d'intérêt du client) — le tag affiche automatiquement ses vraies photos. "
+                . "Si le client veut voir plusieurs produits, utilise [SHOW_CATALOG] à la place.";
 
             // FORMULAIRE COLLECTE D'INFOS WEBCHAT
             $prompt .= "\n\nFORMULAIRE INFOS CLIENT WEBCHAT : Quand tu passes à l'étape customer_info "

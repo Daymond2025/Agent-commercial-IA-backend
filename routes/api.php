@@ -72,6 +72,7 @@ Route::middleware('auth:api')->group(function () {
         Route::apiResource('agents', AgentController::class);
         Route::post('/agents/{agent}/products',             [AgentController::class, 'syncProducts']);
         Route::post('/agents/{agent}/knowledge-base/upload',[AgentController::class, 'uploadKnowledge']);
+        Route::delete('/agents/{agent}/knowledge-base',     [AgentController::class, 'clearKnowledge']);
         Route::get('/agents/{agent}/documents',             [AgentController::class, 'documents']);
         Route::post('/agents/{agent}/train',                [AgentController::class, 'train']);
     });
